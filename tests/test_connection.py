@@ -918,6 +918,47 @@ class _TestConnection(ServerTestCase):
                                             ['skey_ecdsa.pub']))
 
     @asynctest
+    async def test_revoked_known_hosts_key_with_port(self):
+        """Test revoked server host key on a non-default port
+
+           A revoked port-qualified known_hosts entry must take effect
+           even when no trusted port-qualified entry exists, instead of
+           being silently dropped by the port-less fallback lookup.
+
+        """
+
+        with open('skey.pub') as f:
+            skey_pub = f.read()
+
+        host = f'[{self._server_addr}]:{self._server_port}'
+        known_hosts = asyncssh.import_known_hosts(
+            f'@revoked {host} {skey_pub}')
+
+        with self.assertRaises(asyncssh.HostKeyNotVerifiable):
+            await self.connect(known_hosts=known_hosts)
+
+    @asynctest
+    async def test_revoked_port_entry_blocks_plain_trusted(self):
+        """Test a revoked port entry is not overridden by a plain trusted one
+
+           With both a revoked port-qualified entry and a trusted plain
+           entry for the same key, the port-qualified revocation must win
+           and block the connection (a man-in-the-middle defense).
+
+        """
+
+        with open('skey.pub') as f:
+            skey_pub = f.read()
+
+        host = f'[{self._server_addr}]:{self._server_port}'
+        known_hosts = asyncssh.import_known_hosts(
+            f'@revoked {host} {skey_pub}\n'
+            f'{self._server_addr} {skey_pub}\n')
+
+        with self.assertRaises(asyncssh.HostKeyNotVerifiable):
+            await self.connect(known_hosts=known_hosts)
+
+    @asynctest
     async def test_empty_known_hosts(self):
         """Test empty known hosts list"""
 

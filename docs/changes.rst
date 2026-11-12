@@ -3,6 +3,19 @@
 Change Log
 ==========
 
+Release 2.24.2 (in development)
+-------------------------------
+
+* Fixed matching of revoked entries in known_hosts files when they
+  used a non-default port-qualified host pattern (such as
+  ``[host]:port``). Previously, a revoked port-qualified entry could be
+  silently discarded by the port-less fallback lookup when no trusted
+  port-qualified entry was present, allowing a revoked host key,
+  certificate, or subject name to still be trusted. The fallback now
+  only occurs when the port-qualified lookup produces no match of any
+  kind, so port-qualified revocations take effect and port-qualified
+  entries take precedence over entries without a port.
+
 Release 2.24.1 (3 Oct 2026)
 ---------------------------
 

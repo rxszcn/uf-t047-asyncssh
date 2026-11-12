@@ -24,6 +24,7 @@ import binascii
 import hashlib
 import hmac
 import os
+import unittest
 
 import asyncssh
 
@@ -181,6 +182,168 @@ class _TestKnownHosts(TempDirTestCase):
         for testname, patlists, result in matches:
             with self.subTest(testname):
                 self.check_hosts(patlists, result)
+
+    def test_match_port_revoked_matrix(self):
+        """Test host key markers across port and plain host forms
+
+           A revoked port-qualified entry must take effect on a
+           non-default port and must never be discarded by the
+           port-less fallback lookup. Covers the trusted, cert-authority,
+           and revoked host key markers against default-port bracketed,
+           non-default-port bracketed, and plain host forms.
+
+        """
+
+        empty = ([], [], [], [], [], [], [])
+
+        # (test name, patterns, expected result, query port)
+        cases = (
+            # Default-port bracketed entries match a default-port query
+            ('Trusted [host]:22', (['[host]:22'], [], []),
+             ([0], [], [], [], [], [], []), 22),
+            ('CA [host]:22', ([], ['[host]:22'], []),
+             ([], [0], [], [], [], [], []), 22),
+            ('Revoked [host]:22', ([], [], ['[host]:22']),
+             ([], [], [0], [], [], [], []), 22),
+
+            # Non-default-port bracketed entries match their own port
+            ('Trusted [host]:2222', (['[host]:2222'], [], []),
+             ([0], [], [], [], [], [], []), 2222),
+            ('CA [host]:2222', ([], ['[host]:2222'], []),
+             ([], [0], [], [], [], [], []), 2222),
+            ('Revoked [host]:2222', ([], [], ['[host]:2222']),
+             ([], [], [0], [], [], [], []), 2222),
+
+            # Plain entries are reached via the port-less fallback when
+            # no port-qualified entry matches
+            ('Trusted host via fallback', (['host'], [], []),
+             ([0], [], [], [], [], [], []), 2222),
+            ('CA host via fallback', ([], ['host'], []),
+             ([], [0], [], [], [], [], []), 2222),
+            ('Revoked host via fallback', ([], [], ['host']),
+             ([], [], [0], [], [], [], []), 2222),
+
+            # Plain entries match directly when no port is provided
+            ('Trusted host no port', (['host'], [], []),
+             ([0], [], [], [], [], [], []), None),
+            ('CA host no port', ([], ['host'], []),
+             ([], [0], [], [], [], [], []), None),
+            ('Revoked host no port', ([], [], ['host']),
+             ([], [], [0], [], [], [], []), None),
+
+            # A different port never matches
+            ('Mismatched trusted port', (['[host]:2222'], [], []),
+             empty, 22),
+            ('Mismatched revoked port', ([], [], ['[host]:2222']),
+             empty, 22),
+
+            # A port-qualified entry (trusted or revoked) suppresses the
+            # port-less fallback, so plain entries are not mixed in and
+            # the result is stable and unique
+            ('Port revoked blocks plain trusted',
+             ([], [], ['[host]:2222'], [], [], [], ['host']),
+             ([], [], [0], [], [], [], []), 2222),
+            ('Port trusted blocks plain trusted',
+             (['[host]:2222'], [], [], [], [], [], ['host']),
+             ([0], [], [], [], [], [], []), 2222),
+            ('Port revoked blocks plain revoked',
+             ([], [], ['[host]:2222', 'host']),
+             ([], [], [0], [], [], [], []), 2222),
+
+            # A port-qualified trusted entry is not clobbered by a plain
+            # entry of a different marker kind during fallback
+            ('Port trusted wins over plain CA',
+             ([], ['host'], ['[host]:2222']),
+             ([], [], [0], [], [], [], []), 2222),
+        )
+
+        for testname, patlists, result, port in cases:
+            with self.subTest(testname):
+                self.check_hosts(patlists, result, port=port)
+
+    @unittest.skipUnless(x509_available, 'X.509 not available')
+    def test_match_port_x509_revoked_matrix(self):
+        """Test X.509 cert and subject markers across port and plain forms
+
+           Revoked X.509 certificates and revoked subject names carried
+           by port-qualified entries must take effect on a non-default
+           port instead of being dropped by the port-less fallback.
+
+        """
+
+        empty = ([], [], [], [], [], [], [])
+
+        # (test name, patterns, expected result, query port)
+        cases = (
+            # Port-qualified X.509 certificate entries
+            ('Trusted cert [host]:2222', ([], [], [], ['[host]:2222'],
+                                          [], [], []),
+             ([], [], [], [0], [], [], []), 2222),
+            ('Revoked cert [host]:2222', ([], [], [], [],
+                                          ['[host]:2222'], [], []),
+             ([], [], [], [], [0], [], []), 2222),
+
+            # Port-qualified X.509 subject entries
+            ('Trusted subject [host]:2222', ([], [], [], [], [],
+                                             ['[host]:2222'], []),
+             ([], [], [], [], [], [0], []), 2222),
+            ('Revoked subject [host]:2222', ([], [], [], [], [], [],
+                                             ['[host]:2222']),
+             ([], [], [], [], [], [], [0]), 2222),
+
+            # Plain X.509 entries are reached via the port-less fallback
+            ('Trusted cert host via fallback',
+             ([], [], [], ['host'], [], [], []),
+             ([], [], [], [0], [], [], []), 2222),
+            ('Revoked cert host via fallback',
+             ([], [], [], [], ['host'], [], []),
+             ([], [], [], [], [0], [], []), 2222),
+            ('Trusted subject host via fallback',
+             ([], [], [], [], [], ['host'], []),
+             ([], [], [], [], [], [0], []), 2222),
+            ('Revoked subject host via fallback',
+             ([], [], [], [], [], [], ['host']),
+             ([], [], [], [], [], [], [0]), 2222),
+
+            # A port-qualified revoked X.509 entry suppresses fallback and
+            # must not be replaced by a plain trusted X.509 entry
+            ('Port revoked cert blocks plain trusted cert',
+             ([], [], [], ['host'], ['[host]:2222'], [], []),
+             ([], [], [], [], [0], [], []), 2222),
+            ('Port revoked subject blocks plain trusted subject',
+             ([], [], [], [], [], ['host'], ['[host]:2222']),
+             ([], [], [], [], [], [], [0]), 2222),
+
+            # Different port never matches
+            ('Mismatched revoked cert port',
+             ([], [], [], [], ['[host]:2222'], [], []),
+             empty, 22),
+            ('Mismatched revoked subject port',
+             ([], [], [], [], [], [], ['[host]:2222']),
+             empty, 22),
+        )
+
+        for testname, patlists, result, port in cases:
+            with self.subTest(testname):
+                self.check_hosts(patlists, result, port=port)
+
+    def test_match_port_revoked_pattern_forms(self):
+        """Test revoked port-qualified entries using hashed and wildcard forms"""
+
+        # A hashed host entry hashed against the port-qualified host name
+        hashed = _hash('[host]:2222')
+        self.check_hosts(([], [], [hashed]),
+                         ([], [], [0], [], [], [], []), port=2222)
+
+        # A wildcard pattern covering the port-qualified host name
+        self.check_hosts(([], [], ['[hos*]:2222']),
+                         ([], [], [0], [], [], [], []), port=2222)
+
+        # Neither form matches a different port, so no revoked key applies
+        self.check_hosts(([], [], [hashed]),
+                         ([], [], [], [], [], [], []), port=22)
+        self.check_hosts(([], [], ['[hos*]:2222']),
+                         ([], [], [], [], [], [], []), port=22)
 
     def test_no_addr(self):
         """Test match without providing addr"""

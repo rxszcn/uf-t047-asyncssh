@@ -253,8 +253,13 @@ class SSHKnownHosts:
               port: Optional[int]) -> _KnownHostsResult:
         """Match a host, IP address, and port against known_hosts patterns
 
-           If the port is not the default port and no match is found
-           for it, the lookup is attempted again without a port number.
+           If the port is not the default port and no entry of any kind
+           (trusted or revoked) is found matching the port-qualified host
+           or address, the lookup is attempted again without a port
+           number. A port-qualified match always takes precedence over
+           entries without a port, so a port-qualified revoked entry is
+           never silently replaced by the result of a port-less fallback
+           lookup.
 
            :param host:
                The hostname of the target host
@@ -271,15 +276,16 @@ class SSHKnownHosts:
 
         """
 
-        host_keys, ca_keys, revoked_keys, x509_certs, revoked_certs, \
-            x509_subjects, revoked_subjects = self._match(host, addr, port)
+        result = self._match(host, addr, port)
 
-        if port and not (host_keys or ca_keys or x509_certs or x509_subjects):
-            host_keys, ca_keys, revoked_keys, x509_certs, revoked_certs, \
-                x509_subjects, revoked_subjects = self._match(host, addr)
+        # Only fall back to a port-less lookup when the port-qualified
+        # lookup produced no matches at all. Revoked entries count as
+        # matches here; otherwise a revoked port-qualified entry would be
+        # discarded and a port-less trusted entry could be used instead.
+        if port and not any(result):
+            result = self._match(host, addr)
 
-        return (host_keys, ca_keys, revoked_keys, x509_certs, revoked_certs,
-                x509_subjects, revoked_subjects)
+        return result
 
 
 def import_known_hosts(data: str) -> SSHKnownHosts:
@@ -344,8 +350,9 @@ def match_known_hosts(known_hosts: KnownHostsArg, host: str,
            * lists of trusted host keys, trusted CA keys, and revoked keys
              to load without doing any matching
 
-       If the port is not the default port and no match is found
-       for it, the lookup is attempted again without a port number.
+       If the port is not the default port and no entry of any kind
+       (trusted or revoked) matches the port-qualified host or address,
+       the lookup is attempted again without a port number.
 
        :param known_hosts:
            The host patterns to match against
